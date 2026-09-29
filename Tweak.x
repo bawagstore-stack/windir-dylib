@@ -1,5 +1,5 @@
 /*
- * KeyAuth iOS Integration Tweak (Crash-Safe Version)
+ * KeyAuth iOS Integration Tweak (Constructor Version - Pure Objective-C)
  */
 
 #import <UIKit/UIKit.h>
@@ -36,15 +36,27 @@ static BOOL hasValidKey() {
 }
 
 static UIViewController *getTopViewController() {
-    UIViewController *topController = [UIApplication sharedApplication].keyWindow.rootViewController;
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    if (!window) {
+        for (UIWindow *w in [UIApplication sharedApplication].windows) {
+            if (w.isKeyWindow) { window = w; break; }
+        }
+    }
+    UIViewController *topController = window.rootViewController;
     while (topController.presentedViewController) {
         topController = topController.presentedViewController;
     }
     return topController;
 }
 
-static void showKeyAuthAlert(UIViewController *vc) {
-    if (!vc) return;
+static void showKeyAuthAlert(void) {
+    UIViewController *vc = getTopViewController();
+    if (!vc) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            showKeyAuthAlert();
+        });
+        return;
+    }
 
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:@"License Verification"
@@ -67,15 +79,7 @@ static void showKeyAuthAlert(UIViewController *vc) {
             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] uppercaseString];
 
         if (key.length == 0) {
-            UIViewController *currentVC = getTopViewController();
-            UIAlertController *err = [UIAlertController
-                alertControllerWithTitle:@"Error"
-                message:@"Please paste your license key."
-                preferredStyle:UIAlertControllerStyleAlert];
-            UIAlertAction *ok = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *a) { showKeyAuthAlert(currentVC); }];
-            [err addAction:ok];
-            [currentVC presentViewController:err animated:YES completion:nil];
+            showKeyAuthAlert();
             return;
         }
 
@@ -86,7 +90,7 @@ static void showKeyAuthAlert(UIViewController *vc) {
             preferredStyle:UIAlertControllerStyleAlert];
         [currentVC presentViewController:loading animated:YES completion:nil];
 
-        // KeyAuth API Call
+        // KeyAuth API Request
         NSString *deviceID = getDeviceID();
         NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
@@ -111,7 +115,7 @@ static void showKeyAuthAlert(UIViewController *vc) {
                             preferredStyle:UIAlertControllerStyleAlert];
                         [netErr addAction:[UIAlertAction actionWithTitle:@"Retry"
                             style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showKeyAuthAlert(topVC); }]];
+                            handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
                         [topVC presentViewController:netErr animated:YES completion:nil];
                         return;
                     }
@@ -127,12 +131,12 @@ static void showKeyAuthAlert(UIViewController *vc) {
                             preferredStyle:UIAlertControllerStyleAlert];
                         [invalid addAction:[UIAlertAction actionWithTitle:@"Try Again"
                             style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showKeyAuthAlert(topVC); }]];
+                            handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
                         [topVC presentViewController:invalid animated:YES completion:nil];
                         return;
                     }
 
-                    // Save Key Valid Status
+                    // Save Validated Key Session
                     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
                     [ud setObject:key forKey:kKeyStoreKey];
                     NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
@@ -163,19 +167,12 @@ static void showKeyAuthAlert(UIViewController *vc) {
     [vc presentViewController:alert animated:YES completion:nil];
 }
 
-// ── Safe Application Hook ───────────────────────────────────────────────────
-%hook UIApplication
-
-- (void)applicationDidBecomeActive:(UIApplication *)application {
-    %orig;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        if (hasValidKey()) return;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UIViewController *topVC = getTopViewController();
-            showKeyAuthAlert(topVC);
-        });
+// ── Pure Objective-C Constructor Entry Point (Bypasses Substrate Hooking) ─────
+__attribute__((constructor))
+static void initialize_keyauth(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!hasValidKey()) {
+            showKeyAuthAlert();
+        }
     });
 }
-
-%end
