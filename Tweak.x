@@ -1,5 +1,5 @@
 /*
- * KeyAuth iOS Integration Tweak (Constructor Version - Pure Objective-C)
+ * KeyAuth iOS Integration Tweak (Fixed Session Init)
  */
 
 #import <UIKit/UIKit.h>
@@ -49,6 +49,73 @@ static UIViewController *getTopViewController() {
     return topController;
 }
 
+static void showKeyAuthAlert(void);
+
+static void validateLicenseWithSession(NSString *key, NSString *sessionID, UIViewController *topVC, UIAlertController *loading) {
+    NSString *deviceID = getDeviceID();
+    NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+
+    NSString *postData = [NSString stringWithFormat:@"type=license&key=%@&hwid=%@&sessionid=%@&name=%@&ownerid=%@",
+                          key, deviceID, sessionID, kName, kOwnerID];
+    req.HTTPBody = [postData dataUsingEncoding:NSUTF8StringEncoding];
+    req.timeoutInterval = 15;
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [loading dismissViewControllerAnimated:NO completion:^{
+                UIViewController *currentVC = getTopViewController();
+
+                if (err || !data) {
+                    UIAlertController *netErr = [UIAlertController
+                        alertControllerWithTitle:@"Connection Error"
+                        message:@"Network error. Check your connection."
+                        preferredStyle:UIAlertControllerStyleAlert];
+                    [netErr addAction:[UIAlertAction actionWithTitle:@"Retry"
+                        style:UIAlertActionStyleDefault
+                        handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
+                    [currentVC presentViewController:netErr animated:YES completion:nil];
+                    return;
+                }
+
+                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                BOOL success = [json[@"success"] boolValue];
+
+                if (!success) {
+                    NSString *msg = json[@"message"] ?: @"Invalid key.";
+                    UIAlertController *invalid = [UIAlertController
+                        alertControllerWithTitle:@"Activation Failed"
+                        message:msg
+                        preferredStyle:UIAlertControllerStyleAlert];
+                    [invalid addAction:[UIAlertAction actionWithTitle:@"Try Again"
+                        style:UIAlertActionStyleDefault
+                        handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
+                    [currentVC presentViewController:invalid animated:YES completion:nil];
+                    return;
+                }
+
+                // Success! Save session locally for 30 days
+                NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+                [ud setObject:key forKey:kKeyStoreKey];
+                NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
+                [ud setObject:expDate forKey:kKeyExpiry];
+                [ud synchronize];
+
+                UIAlertController *successAlert = [UIAlertController
+                    alertControllerWithTitle:@"Success"
+                    message:@"License activated successfully!"
+                    preferredStyle:UIAlertControllerStyleAlert];
+                [successAlert addAction:[UIAlertAction actionWithTitle:@"Enter App"
+                    style:UIAlertActionStyleDefault handler:nil]];
+                [currentVC presentViewController:successAlert animated:YES completion:nil];
+            }];
+        });
+    }] resume];
+}
+
 static void showKeyAuthAlert(void) {
     UIViewController *vc = getTopViewController();
     if (!vc) {
@@ -90,68 +157,61 @@ static void showKeyAuthAlert(void) {
             preferredStyle:UIAlertControllerStyleAlert];
         [currentVC presentViewController:loading animated:YES completion:nil];
 
-        // KeyAuth API Request
-        NSString *deviceID = getDeviceID();
+        // Step 1: Initialize Session
         NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
         req.HTTPMethod = @"POST";
         [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
-        NSString *postData = [NSString stringWithFormat:@"type=license&key=%@&hwid=%@&name=%@&ownerid=%@&secret=%@&ver=%@",
-                              key, deviceID, kName, kOwnerID, kSecret, kVersion];
+        NSString *postData = [NSString stringWithFormat:@"type=init&name=%@&ownerid=%@&secret=%@&ver=%@",
+                              kName, kOwnerID, kSecret, kVersion];
         req.HTTPBody = [postData dataUsingEncoding:NSUTF8StringEncoding];
         req.timeoutInterval = 15;
 
         [[[NSURLSession sharedSession] dataTaskWithRequest:req
             completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [loading dismissViewControllerAnimated:NO completion:^{
-                    UIViewController *topVC = getTopViewController();
-
-                    if (err || !data) {
+            if (err || !data) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [loading dismissViewControllerAnimated:NO completion:^{
+                        UIViewController *topVC = getTopViewController();
                         UIAlertController *netErr = [UIAlertController
                             alertControllerWithTitle:@"Connection Error"
-                            message:@"Network error. Check your connection."
+                            message:@"Network error during initialization."
                             preferredStyle:UIAlertControllerStyleAlert];
                         [netErr addAction:[UIAlertAction actionWithTitle:@"Retry"
                             style:UIAlertActionStyleDefault
                             handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
                         [topVC presentViewController:netErr animated:YES completion:nil];
-                        return;
-                    }
+                    }];
+                });
+                return;
+            }
 
-                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                    BOOL success = [json[@"success"] boolValue];
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            BOOL success = [json[@"success"] boolValue];
+            NSString *sessionID = json[@"sessionid"];
 
-                    if (!success) {
-                        NSString *msg = json[@"message"] ?: @"Invalid key.";
-                        UIAlertController *invalid = [UIAlertController
-                            alertControllerWithTitle:@"Activation Failed"
+            if (!success || !sessionID) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [loading dismissViewControllerAnimated:NO completion:^{
+                        UIViewController *topVC = getTopViewController();
+                        NSString *msg = json[@"message"] ?: @"Initialization failed.";
+                        UIAlertController *initErr = [UIAlertController
+                            alertControllerWithTitle:@"Init Error"
                             message:msg
                             preferredStyle:UIAlertControllerStyleAlert];
-                        [invalid addAction:[UIAlertAction actionWithTitle:@"Try Again"
+                        [initErr addAction:[UIAlertAction actionWithTitle:@"Try Again"
                             style:UIAlertActionStyleDefault
                             handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
-                        [topVC presentViewController:invalid animated:YES completion:nil];
-                        return;
-                    }
+                        [topVC presentViewController:initErr animated:YES completion:nil];
+                    }];
+                });
+                return;
+            }
 
-                    // Save Validated Key Session
-                    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-                    [ud setObject:key forKey:kKeyStoreKey];
-                    NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
-                    [ud setObject:expDate forKey:kKeyExpiry];
-                    [ud synchronize];
+            // Step 2: Session acquired, now validate License Key
+            validateLicenseWithSession(key, sessionID, currentVC, loading);
 
-                    UIAlertController *successAlert = [UIAlertController
-                        alertControllerWithTitle:@"Success"
-                        message:@"License activated successfully!"
-                        preferredStyle:UIAlertControllerStyleAlert];
-                    [successAlert addAction:[UIAlertAction actionWithTitle:@"Enter App"
-                        style:UIAlertActionStyleDefault handler:nil]];
-                    [topVC presentViewController:successAlert animated:YES completion:nil];
-                }];
-            });
         }] resume];
     }];
 
@@ -167,7 +227,6 @@ static void showKeyAuthAlert(void) {
     [vc presentViewController:alert animated:YES completion:nil];
 }
 
-// ── Pure Objective-C Constructor Entry Point (Bypasses Substrate Hooking) ─────
 __attribute__((constructor))
 static void initialize_keyauth(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
