@@ -1,5 +1,5 @@
 /*
- * KeyAuth iOS Integration Tweak (Fixed Session Init)
+ * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI Version)
  */
 
 #import <UIKit/UIKit.h>
@@ -10,6 +10,8 @@ static NSString *const kName     = @"420euro's Application";
 static NSString *const kOwnerID  = @"Z3NXQY2bdP";
 static NSString *const kSecret   = @"34afdd8daf83695b2dc9dbc2f82d5d926bd64d509a569d219bbede8f685deebc";
 static NSString *const kVersion  = @"1.0";
+
+static NSString *const kImageURL  = @"https://i.ibb.co/zVX99kKn/IMG-0441.jpg";
 
 static NSString *const kKeyStoreKey = @"KeyAuthActivatedKey";
 static NSString *const kKeyExpiry   = @"KeyAuthKeyExpiry";
@@ -49,189 +51,218 @@ static UIViewController *getTopViewController() {
     return topController;
 }
 
-static void showKeyAuthAlert(void);
+static void showCustomBawaGPopup(void);
 
-static void validateLicenseWithSession(NSString *key, NSString *sessionID, UIViewController *topVC, UIAlertController *loading) {
-    NSString *deviceID = getDeviceID();
+static void validateKeyAuth(NSString *key, UIViewController *vc, UIView *overlayView) {
+    // Step 1: Session Init
     NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
-    NSString *postData = [NSString stringWithFormat:@"type=license&key=%@&hwid=%@&sessionid=%@&name=%@&ownerid=%@",
-                          key, deviceID, sessionID, kName, kOwnerID];
-    req.HTTPBody = [postData dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *initData = [NSString stringWithFormat:@"type=init&name=%@&ownerid=%@&secret=%@&ver=%@",
+                          kName, kOwnerID, kSecret, kVersion];
+    req.HTTPBody = [initData dataUsingEncoding:NSUTF8StringEncoding];
     req.timeoutInterval = 15;
+
+    UIAlertController *loading = [UIAlertController
+        alertControllerWithTitle:@"BAWA G STORE"
+        message:@"Verifying License..."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [vc presentViewController:loading animated:YES completion:nil];
 
     [[[NSURLSession sharedSession] dataTaskWithRequest:req
         completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [loading dismissViewControllerAnimated:NO completion:^{
-                UIViewController *currentVC = getTopViewController();
+        if (err || !data) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [loading dismissViewControllerAnimated:NO completion:^{
+                    UIAlertController *netErr = [UIAlertController alertControllerWithTitle:@"Error" message:@"Network connection failed." preferredStyle:UIAlertControllerStyleAlert];
+                    [netErr addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                    [vc presentViewController:netErr animated:YES completion:nil];
+                }];
+            });
+            return;
+        }
 
-                if (err || !data) {
-                    UIAlertController *netErr = [UIAlertController
-                        alertControllerWithTitle:@"Connection Error"
-                        message:@"Network error. Check your connection."
-                        preferredStyle:UIAlertControllerStyleAlert];
-                    [netErr addAction:[UIAlertAction actionWithTitle:@"Retry"
-                        style:UIAlertActionStyleDefault
-                        handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
-                    [currentVC presentViewController:netErr animated:YES completion:nil];
-                    return;
-                }
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        NSString *sessionID = json[@"sessionid"];
+        BOOL initSuccess = [json[@"success"] boolValue];
 
-                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                BOOL success = [json[@"success"] boolValue];
+        if (!initSuccess || !sessionID) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [loading dismissViewControllerAnimated:NO completion:^{
+                    NSString *msg = json[@"message"] ?: @"Session Init failed.";
+                    UIAlertController *errAlert = [UIAlertController alertControllerWithTitle:@"Init Failed" message:msg preferredStyle:UIAlertControllerStyleAlert];
+                    [errAlert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                    [vc presentViewController:errAlert animated:YES completion:nil];
+                }];
+            });
+            return;
+        }
 
-                if (!success) {
-                    NSString *msg = json[@"message"] ?: @"Invalid key.";
-                    UIAlertController *invalid = [UIAlertController
-                        alertControllerWithTitle:@"Activation Failed"
-                        message:msg
-                        preferredStyle:UIAlertControllerStyleAlert];
-                    [invalid addAction:[UIAlertAction actionWithTitle:@"Try Again"
-                        style:UIAlertActionStyleDefault
-                        handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
-                    [currentVC presentViewController:invalid animated:YES completion:nil];
-                    return;
-                }
+        // Step 2: License Check
+        NSMutableURLRequest *licReq = [NSMutableURLRequest requestWithURL:url];
+        licReq.HTTPMethod = @"POST";
+        [licReq setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
-                // Success! Save session locally for 30 days
-                NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-                [ud setObject:key forKey:kKeyStoreKey];
-                NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
-                [ud setObject:expDate forKey:kKeyExpiry];
-                [ud synchronize];
+        NSString *licData = [NSString stringWithFormat:@"type=license&key=%@&hwid=%@&sessionid=%@&name=%@&ownerid=%@",
+                             key, getDeviceID(), sessionID, kName, kOwnerID];
+        licReq.HTTPBody = [licData dataUsingEncoding:NSUTF8StringEncoding];
+        licReq.timeoutInterval = 15;
 
-                UIAlertController *successAlert = [UIAlertController
-                    alertControllerWithTitle:@"Success"
-                    message:@"License activated successfully!"
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [successAlert addAction:[UIAlertAction actionWithTitle:@"Enter App"
-                    style:UIAlertActionStyleDefault handler:nil]];
-                [currentVC presentViewController:successAlert animated:YES completion:nil];
-            }];
-        });
+        [[[NSURLSession sharedSession] dataTaskWithRequest:licReq completionHandler:^(NSData *lData, NSURLResponse *lResp, NSError *lErr) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [loading dismissViewControllerAnimated:NO completion:^{
+                    if (lErr || !lData) {
+                        UIAlertController *netErr = [UIAlertController alertControllerWithTitle:@"Error" message:@"License check failed." preferredStyle:UIAlertControllerStyleAlert];
+                        [netErr addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                        [vc presentViewController:netErr animated:YES completion:nil];
+                        return;
+                    }
+
+                    NSDictionary *lJson = [NSJSONSerialization JSONObjectWithData:lData options:0 error:nil];
+                    BOOL licSuccess = [lJson[@"success"] boolValue];
+
+                    if (!licSuccess) {
+                        NSString *msg = lJson[@"message"] ?: @"Invalid License Key!";
+                        UIAlertController *invAlert = [UIAlertController alertControllerWithTitle:@"Activation Failed" message:msg preferredStyle:UIAlertControllerStyleAlert];
+                        [invAlert addAction:[UIAlertAction actionWithTitle:@"Try Again" style:UIAlertActionStyleDefault handler:nil]];
+                        [vc presentViewController:invAlert animated:YES completion:nil];
+                        return;
+                    }
+
+                    // Save Validated State for 30 Days
+                    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+                    [ud setObject:key forKey:kKeyStoreKey];
+                    NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
+                    [ud setObject:expDate forKey:kKeyExpiry];
+                    [ud synchronize];
+
+                    // Close Custom Modal
+                    [overlayView removeFromSuperview];
+
+                    UIAlertController *succAlert = [UIAlertController alertControllerWithTitle:@"Success" message:@"Welcome to BAWA G STORE!" preferredStyle:UIAlertControllerStyleAlert];
+                    [succAlert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:nil]];
+                    [vc presentViewController:succAlert animated:YES completion:nil];
+                }];
+            });
+        }] resume];
+
     }] resume];
 }
 
-static void showKeyAuthAlert(void) {
-    UIViewController *vc = getTopViewController();
-    if (!vc) {
+static void showCustomBawaGPopup(void) {
+    UIViewController *topVC = getTopViewController();
+    if (!topVC) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            showKeyAuthAlert();
+            showCustomBawaGPopup();
         });
         return;
     }
 
-    UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"License Verification"
-        message:@"Enter your KeyAuth license key to continue."
-        preferredStyle:UIAlertControllerStyleAlert];
+    // Overlay Screen Background
+    UIView *overlayView = [[UIView alloc] initWithFrame:topVC.view.bounds];
+    overlayView.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.65];
+    overlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.placeholder = @"Paste license key";
-        tf.clearButtonMode = UITextFieldViewModeWhileEditing;
-        tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-        tf.autocorrectionType = UITextAutocorrectionTypeNo;
-    }];
+    // Card View Container
+    CGFloat cardWidth = 320;
+    CGFloat cardHeight = 260;
+    UIView *cardView = [[UIView alloc] initWithFrame:CGRectMake((overlayView.frame.size.width - cardWidth)/2, (overlayView.frame.size.height - cardHeight)/2, cardWidth, cardHeight)];
+    cardView.layer.cornerRadius = 20;
+    cardView.layer.masksToBounds = YES;
+    cardView.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.14 alpha:1.0];
+    cardView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
 
-    UIAlertAction *activate = [UIAlertAction
-        actionWithTitle:@"Activate"
-        style:UIAlertActionStyleDefault
-        handler:^(UIAlertAction *action) {
+    // Background Image with Low Opacity (Transparent Look)
+    UIImageView *bgImageView = [[UIImageView alloc] initWithFrame:cardView.bounds];
+    bgImageView.contentMode = UIViewContentModeScaleAspectFill;
+    bgImageView.alpha = 0.30; // Image transparency for clear readability
+    bgImageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [cardView addSubview:bgImageView];
 
-        NSString *key = [[alert.textFields.firstObject.text
-            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] uppercaseString];
-
-        if (key.length == 0) {
-            showKeyAuthAlert();
-            return;
+    // Download Image Asynchronously
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSData *imgData = [NSData dataWithContentsOfURL:[NSURL URLWithString:kImageURL]];
+        if (imgData) {
+            UIImage *img = [UIImage imageWithData:imgData];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                bgImageView.image = img;
+            });
         }
+    });
 
-        UIViewController *currentVC = getTopViewController();
-        UIAlertController *loading = [UIAlertController
-            alertControllerWithTitle:@"KeyAuth"
-            message:@"Validating key…"
-            preferredStyle:UIAlertControllerStyleAlert];
-        [currentVC presentViewController:loading animated:YES completion:nil];
+    // Header Title
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 20, cardWidth - 20, 28)];
+    titleLabel.text = @"WELCOME TO BAWA G STORE";
+    titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.textAlignment = NSTextAlignmentCenter;
+    [cardView addSubview:titleLabel];
 
-        // Step 1: Initialize Session
-        NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
-        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-        req.HTTPMethod = @"POST";
-        [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+    // Subtitle
+    UILabel *subLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 52, cardWidth - 20, 36)];
+    subLabel.text = @"Enter your VIP license key to activate session.";
+    subLabel.font = [UIFont systemFontOfSize:12];
+    subLabel.textColor = [UIColor lightGrayColor];
+    subLabel.textAlignment = NSTextAlignmentCenter;
+    subLabel.numberOfLines = 2;
+    [cardView addSubview:subLabel];
 
-        NSString *postData = [NSString stringWithFormat:@"type=init&name=%@&ownerid=%@&secret=%@&ver=%@",
-                              kName, kOwnerID, kSecret, kVersion];
-        req.HTTPBody = [postData dataUsingEncoding:NSUTF8StringEncoding];
-        req.timeoutInterval = 15;
+    // Key Input Text Field
+    UITextField *keyInput = [[UITextField alloc] initWithFrame:CGRectMake(20, 100, cardWidth - 40, 42)];
+    keyInput.placeholder = @"Paste License Key";
+    keyInput.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
+    keyInput.textColor = [UIColor whiteColor];
+    keyInput.font = [UIFont systemFontOfSize:14];
+    keyInput.layer.cornerRadius = 10;
+    keyInput.layer.borderWidth = 1;
+    keyInput.layer.borderColor = [[[UIColor whiteColor] colorWithAlphaComponent:0.3] CGColor];
+    keyInput.textAlignment = NSTextAlignmentCenter;
+    keyInput.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+    keyInput.autocorrectionType = UITextAutocorrectionTypeNo;
+    [cardView addSubview:keyInput];
 
-        [[[NSURLSession sharedSession] dataTaskWithRequest:req
-            completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-            if (err || !data) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [loading dismissViewControllerAnimated:NO completion:^{
-                        UIViewController *topVC = getTopViewController();
-                        UIAlertController *netErr = [UIAlertController
-                            alertControllerWithTitle:@"Connection Error"
-                            message:@"Network error during initialization."
-                            preferredStyle:UIAlertControllerStyleAlert];
-                        [netErr addAction:[UIAlertAction actionWithTitle:@"Retry"
-                            style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
-                        [topVC presentViewController:netErr animated:YES completion:nil];
-                    }];
-                });
-                return;
-            }
+    // Activate Button
+    UIButton *activateBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    activateBtn.frame = CGRectMake(20, 155, cardWidth - 40, 42);
+    activateBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.50 blue:0.98 alpha:1.0];
+    [activateBtn setTitle:@"Activate License" forState:UIControlStateNormal];
+    [activateBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    activateBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    activateBtn.layer.cornerRadius = 10;
+    [cardView addSubview:activateBtn];
 
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            BOOL success = [json[@"success"] boolValue];
-            NSString *sessionID = json[@"sessionid"];
+    // Quit Button
+    UIButton *quitBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    quitBtn.frame = CGRectMake(20, 205, cardWidth - 40, 35);
+    [quitBtn setTitle:@"Quit App" forState:UIControlStateNormal];
+    [quitBtn setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
+    quitBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    [cardView addSubview:quitBtn];
 
-            if (!success || !sessionID) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [loading dismissViewControllerAnimated:NO completion:^{
-                        UIViewController *topVC = getTopViewController();
-                        NSString *msg = json[@"message"] ?: @"Initialization failed.";
-                        UIAlertController *initErr = [UIAlertController
-                            alertControllerWithTitle:@"Init Error"
-                            message:msg
-                            preferredStyle:UIAlertControllerStyleAlert];
-                        [initErr addAction:[UIAlertAction actionWithTitle:@"Try Again"
-                            style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showKeyAuthAlert(); }]];
-                        [topVC presentViewController:initErr animated:YES completion:nil];
-                    }];
-                });
-                return;
-            }
+    // Button Actions
+    [activateBtn addAction:[UIAction actionWithHandler:^(UIAction *action) {
+        NSString *enteredKey = [keyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (enteredKey.length > 0) {
+            validateKeyAuth(enteredKey, topVC, overlayView);
+        }
+    }] forControlEvents:UIControlEventTouchUpInside];
 
-            // Step 2: Session acquired, now validate License Key
-            validateLicenseWithSession(key, sessionID, currentVC, loading);
+    [quitBtn addAction:[UIAction actionWithHandler:^(UIAction *action) {
+        exit(0);
+    }] forControlEvents:UIControlEventTouchUpInside];
 
-        }] resume];
-    }];
-
-    UIAlertAction *quit = [UIAlertAction
-        actionWithTitle:@"Quit"
-        style:UIAlertActionStyleDestructive
-        handler:^(UIAlertAction *action) {
-            exit(0);
-        }];
-
-    [alert addAction:activate];
-    [alert addAction:quit];
-    [vc presentViewController:alert animated:YES completion:nil];
+    [overlayView addSubview:cardView];
+    [topVC.view addSubview:overlayView];
 }
 
+// ── Entry Constructor Point ──────────────────────────────────────────────────
 __attribute__((constructor))
-static void initialize_keyauth(void) {
+static void init_bawa_g_store(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (!hasValidKey()) {
-            showKeyAuthAlert();
+            showCustomBawaGPopup();
         }
     });
 }
