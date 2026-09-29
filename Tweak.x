@@ -1,5 +1,5 @@
 /*
- * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI Version)
+ * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI - Fixed for iOS 9+)
  */
 
 #import <UIKit/UIKit.h>
@@ -17,6 +17,15 @@ static NSString *const kKeyStoreKey = @"KeyAuthActivatedKey";
 static NSString *const kKeyExpiry   = @"KeyAuthKeyExpiry";
 static NSString *const kDeviceIDKey = @"KeyAuthDeviceID";
 // ─────────────────────────────────────────────────────────────────────────────
+
+@interface BawaGHandler : NSObject
+@property (nonatomic, strong) UITextField *keyInput;
+@property (nonatomic, strong) UIViewController *topVC;
+@property (nonatomic, strong) UIView *overlayView;
++ (instancetype)sharedInstance;
+- (void)activatePressed;
+- (void)quitPressed;
+@end
 
 static NSString *getDeviceID() {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
@@ -51,14 +60,28 @@ static UIViewController *getTopViewController() {
     return topController;
 }
 
-static void showCustomBawaGPopup(void);
+@implementation BawaGHandler
++ (instancetype)sharedInstance {
+    static BawaGHandler *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[BawaGHandler alloc] init];
+    });
+    return instance;
+}
 
-static void validateKeyAuth(NSString *key, UIViewController *vc, UIView *overlayView) {
+- (void)activatePressed {
+    NSString *enteredKey = [self.keyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (enteredKey.length == 0) return;
+
+    UIViewController *vc = self.topVC;
+    UIView *overlay = self.overlayView;
+
     // Step 1: Session Init
     NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
-    [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+    [req setValue:@"application/x-www-form-urlencoded" forHeaderField:@"Content-Type"];
 
     NSString *initData = [NSString stringWithFormat:@"type=init&name=%@&ownerid=%@&secret=%@&ver=%@",
                           kName, kOwnerID, kSecret, kVersion];
@@ -103,10 +126,10 @@ static void validateKeyAuth(NSString *key, UIViewController *vc, UIView *overlay
         // Step 2: License Check
         NSMutableURLRequest *licReq = [NSMutableURLRequest requestWithURL:url];
         licReq.HTTPMethod = @"POST";
-        [licReq setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+        [licReq setValue:@"application/x-www-form-urlencoded" forHeaderField:@"Content-Type"];
 
         NSString *licData = [NSString stringWithFormat:@"type=license&key=%@&hwid=%@&sessionid=%@&name=%@&ownerid=%@",
-                             key, getDeviceID(), sessionID, kName, kOwnerID];
+                             enteredKey, getDeviceID(), sessionID, kName, kOwnerID];
         licReq.HTTPBody = [licData dataUsingEncoding:NSUTF8StringEncoding];
         licReq.timeoutInterval = 15;
 
@@ -133,13 +156,13 @@ static void validateKeyAuth(NSString *key, UIViewController *vc, UIView *overlay
 
                     // Save Validated State for 30 Days
                     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-                    [ud setObject:key forKey:kKeyStoreKey];
+                    [ud setObject:enteredKey forKey:kKeyStoreKey];
                     NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
                     [ud setObject:expDate forKey:kKeyExpiry];
                     [ud synchronize];
 
-                    // Close Custom Modal
-                    [overlayView removeFromSuperview];
+                    // Close Custom View
+                    [overlay removeFromSuperview];
 
                     UIAlertController *succAlert = [UIAlertController alertControllerWithTitle:@"Success" message:@"Welcome to BAWA G STORE!" preferredStyle:UIAlertControllerStyleAlert];
                     [succAlert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:nil]];
@@ -150,6 +173,11 @@ static void validateKeyAuth(NSString *key, UIViewController *vc, UIView *overlay
 
     }] resume];
 }
+
+- (void)quitPressed {
+    exit(0);
+}
+@end
 
 static void showCustomBawaGPopup(void) {
     UIViewController *topVC = getTopViewController();
@@ -174,10 +202,10 @@ static void showCustomBawaGPopup(void) {
     cardView.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.14 alpha:1.0];
     cardView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
 
-    // Background Image with Low Opacity (Transparent Look)
+    // Background Image
     UIImageView *bgImageView = [[UIImageView alloc] initWithFrame:cardView.bounds];
     bgImageView.contentMode = UIViewContentModeScaleAspectFill;
-    bgImageView.alpha = 0.30; // Image transparency for clear readability
+    bgImageView.alpha = 0.30;
     bgImageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [cardView addSubview:bgImageView];
 
@@ -209,7 +237,7 @@ static void showCustomBawaGPopup(void) {
     subLabel.numberOfLines = 2;
     [cardView addSubview:subLabel];
 
-    // Key Input Text Field
+    // Key Input
     UITextField *keyInput = [[UITextField alloc] initWithFrame:CGRectMake(20, 100, cardWidth - 40, 42)];
     keyInput.placeholder = @"Paste License Key";
     keyInput.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
@@ -223,6 +251,12 @@ static void showCustomBawaGPopup(void) {
     keyInput.autocorrectionType = UITextAutocorrectionTypeNo;
     [cardView addSubview:keyInput];
 
+    // Save references to handler
+    BawaGHandler *handler = [BawaGHandler sharedInstance];
+    handler.keyInput = keyInput;
+    handler.topVC = topVC;
+    handler.overlayView = overlayView;
+
     // Activate Button
     UIButton *activateBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     activateBtn.frame = CGRectMake(20, 155, cardWidth - 40, 42);
@@ -231,6 +265,7 @@ static void showCustomBawaGPopup(void) {
     [activateBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     activateBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
     activateBtn.layer.cornerRadius = 10;
+    [activateBtn addTarget:handler action:@selector(activatePressed) forControlEvents:UIControlEventTouchUpInside];
     [cardView addSubview:activateBtn];
 
     // Quit Button
@@ -239,25 +274,14 @@ static void showCustomBawaGPopup(void) {
     [quitBtn setTitle:@"Quit App" forState:UIControlStateNormal];
     [quitBtn setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
     quitBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    [quitBtn addTarget:handler action:@selector(quitPressed) forControlEvents:UIControlEventTouchUpInside];
     [cardView addSubview:quitBtn];
-
-    // Button Actions
-    [activateBtn addAction:[UIAction actionWithHandler:^(UIAction *action) {
-        NSString *enteredKey = [keyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if (enteredKey.length > 0) {
-            validateKeyAuth(enteredKey, topVC, overlayView);
-        }
-    }] forControlEvents:UIControlEventTouchUpInside];
-
-    [quitBtn addAction:[UIAction actionWithHandler:^(UIAction *action) {
-        exit(0);
-    }] forControlEvents:UIControlEventTouchUpInside];
 
     [overlayView addSubview:cardView];
     [topVC.view addSubview:overlayView];
 }
 
-// ── Entry Constructor Point ──────────────────────────────────────────────────
+// ── Entry Point ──────────────────────────────────────────────────────────────
 __attribute__((constructor))
 static void init_bawa_g_store(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
