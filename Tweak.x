@@ -1,10 +1,14 @@
 /*
- * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI + AES Decryption)
+ * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI + Fixed CommonCrypto)
  */
 
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
-#import <CommonCrypto/CommonCryptor.h>
+#import <CommonCrypto/CommonCrypto.h>
+
+#ifndef CC_MD5_DIGEST_LENGTH
+#define CC_MD5_DIGEST_LENGTH 16
+#endif
 
 // ── KeyAuth Credentials ──────────────────────────────────────────────────────
 static NSString *const kName     = @"420euro's Application";
@@ -12,7 +16,7 @@ static NSString *const kOwnerID  = @"Z3NXQY2bdP";
 static NSString *const kSecret   = @"34afdd8daf83695b2dc9dbc2f82d5d926bd64d509a569d219bbede8f685deebc";
 static NSString *const kVersion  = @"1.0";
 
-// Decryption Key (Jo Termux command me rakhi thi: "MySecretPass123")
+// Decryption Key
 static NSString *const kPatchPassword = @"MySecretPass123";
 
 static NSString *const kImageURL  = @"https://i.ibb.co/zVX99kKn/IMG-0441.jpg";
@@ -36,7 +40,6 @@ static BOOL decryptAndLoadPatch(NSString *password) {
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     NSString *binPath = [bundlePath stringByAppendingPathComponent:@"Frameworks/mypatch.bin"];
     
-    // Fallback if not in Frameworks
     if (![[NSFileManager defaultManager] fileExistsAtPath:binPath]) {
         binPath = [bundlePath stringByAppendingPathComponent:@"mypatch.bin"];
     }
@@ -44,34 +47,30 @@ static BOOL decryptAndLoadPatch(NSString *password) {
     NSData *encData = [NSData dataWithContentsOfFile:binPath];
     if (!encData || encData.length < 16) return NO;
 
-    // OpenSSL enc -aes-256-cbc format compatibility
-    // First 8 bytes = "Salted__", next 8 bytes = Salt
-    char *dataPtr = (char *)[encData bytes];
+    const char *dataPtr = (const char *)[encData bytes];
     if (strncmp(dataPtr, "Salted__", 8) != 0) return NO;
 
     NSData *salt = [encData subdataWithRange:NSMakeRange(8, 8)];
     NSData *ciphertext = [encData subdataWithRange:NSMakeRange(16, encData.length - 16)];
 
-    // Derive Key and IV using OpenSSL EVP_BytesToKey (MD5 algorithm)
-    NSMutableData *passwordData = [[password dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+    NSData *passwordData = [password dataUsingEncoding:NSUTF8StringEncoding];
     NSMutableData *keyAndIV = [NSMutableData data];
     NSData *currentHash = [NSData data];
     
-    while (keyAndIV.length < 48) { // 32 bytes Key + 16 bytes IV
+    while (keyAndIV.length < 48) {
         NSMutableData *dataToHash = [currentHash mutableCopy];
         [dataToHash appendData:passwordData];
         [dataToHash appendData:salt];
         
-        unsigned char digest[CC_MD5_DIGEST_LENGTH];
-        CC_MD5([dataToHash bytes], (CC_LONG)[dataToHash length], digest);
-        currentHash = [NSData dataWithBytes:digest length:CC_MD5_DIGEST_LENGTH];
+        unsigned char digest[16];
+        CC_MD5((const void *)[dataToHash bytes], (CC_LONG)[dataToHash length], digest);
+        currentHash = [NSData dataWithBytes:digest length:16];
         [keyAndIV appendData:currentHash];
     }
 
     NSData *keyData = [keyAndIV subdataWithRange:NSMakeRange(0, 32)];
     NSData *ivData = [keyAndIV subdataWithRange:NSMakeRange(32, 16)];
 
-    // CCDecrypt AES-256
     size_t outLength = 0;
     NSMutableData *decryptedData = [NSMutableData dataWithLength:ciphertext.length + kCCBlockSizeAES128];
 
@@ -88,9 +87,6 @@ static BOOL decryptAndLoadPatch(NSString *password) {
 
     if (status == kCCSuccess) {
         [decryptedData setLength:outLength];
-        
-        // Decrypted Patch successfully ready in memory!
-        // Yahan file ko memory me apply kiya ja raha hai
         NSLog(@"[BAWA G STORE] Patch Decrypted Successfully! Size: %lu bytes", (unsigned long)decryptedData.length);
         return YES;
     }
@@ -117,7 +113,6 @@ static BOOL hasValidKey() {
     
     BOOL isValid = [exp timeIntervalSinceNow] > 0;
     if (isValid) {
-        // Cached key valid hai -> Patch decrypt kar do
         decryptAndLoadPatch(kPatchPassword);
     }
     return isValid;
@@ -154,7 +149,6 @@ static UIViewController *getTopViewController() {
     UIViewController *vc = self.topVC;
     UIView *overlay = self.overlayView;
 
-    // Step 1: Session Init
     NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
@@ -200,7 +194,6 @@ static UIViewController *getTopViewController() {
             return;
         }
 
-        // Step 2: License Check
         NSMutableURLRequest *licReq = [NSMutableURLRequest requestWithURL:url];
         licReq.HTTPMethod = @"POST";
         [licReq setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
@@ -231,17 +224,14 @@ static UIViewController *getTopViewController() {
                         return;
                     }
 
-                    // Save Validated State for 30 Days
                     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
                     [ud setObject:enteredKey forKey:kKeyStoreKey];
                     NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
                     [ud setObject:expDate forKey:kKeyExpiry];
                     [ud synchronize];
 
-                    // KeyAuth Success -> Decrypt Gamepatch
                     BOOL decrypted = decryptAndLoadPatch(kPatchPassword);
 
-                    // Close Custom View
                     [overlay removeFromSuperview];
 
                     NSString *succMessage = decrypted ? @"Welcome to BAWA G STORE! VIP Patch Activated." : @"Key Validated, but mypatch.bin not found!";
@@ -269,12 +259,10 @@ static void showCustomBawaGPopup(void) {
         return;
     }
 
-    // Overlay Screen Background
     UIView *overlayView = [[UIView alloc] initWithFrame:topVC.view.bounds];
     overlayView.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.65];
     overlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-    // Card View Container
     CGFloat cardWidth = 320;
     CGFloat cardHeight = 260;
     UIView *cardView = [[UIView alloc] initWithFrame:CGRectMake((overlayView.frame.size.width - cardWidth)/2, (overlayView.frame.size.height - cardHeight)/2, cardWidth, cardHeight)];
@@ -283,14 +271,12 @@ static void showCustomBawaGPopup(void) {
     cardView.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.14 alpha:1.0];
     cardView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
 
-    // Background Image
     UIImageView *bgImageView = [[UIImageView alloc] initWithFrame:cardView.bounds];
     bgImageView.contentMode = UIViewContentModeScaleAspectFill;
     bgImageView.alpha = 0.30;
     bgImageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [cardView addSubview:bgImageView];
 
-    // Download Image Asynchronously
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSData *imgData = [NSData dataWithContentsOfURL:[NSURL URLWithString:kImageURL]];
         if (imgData) {
@@ -301,7 +287,6 @@ static void showCustomBawaGPopup(void) {
         }
     });
 
-    // Header Title
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 20, cardWidth - 20, 28)];
     titleLabel.text = @"WELCOME TO BAWA G STORE";
     titleLabel.font = [UIFont boldSystemFontOfSize:17];
@@ -309,7 +294,6 @@ static void showCustomBawaGPopup(void) {
     titleLabel.textAlignment = NSTextAlignmentCenter;
     [cardView addSubview:titleLabel];
 
-    // Subtitle
     UILabel *subLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 52, cardWidth - 20, 36)];
     subLabel.text = @"Enter your VIP license key to activate session.";
     subLabel.font = [UIFont systemFontOfSize:12];
@@ -318,7 +302,6 @@ static void showCustomBawaGPopup(void) {
     subLabel.numberOfLines = 2;
     [cardView addSubview:subLabel];
 
-    // Key Input
     UITextField *keyInput = [[UITextField alloc] initWithFrame:CGRectMake(20, 100, cardWidth - 40, 42)];
     keyInput.placeholder = @"Paste License Key";
     keyInput.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.15];
@@ -332,13 +315,11 @@ static void showCustomBawaGPopup(void) {
     keyInput.autocorrectionType = UITextAutocorrectionTypeNo;
     [cardView addSubview:keyInput];
 
-    // Save references to handler
     BawaGHandler *handler = [BawaGHandler sharedInstance];
     handler.keyInput = keyInput;
     handler.topVC = topVC;
     handler.overlayView = overlayView;
 
-    // Activate Button
     UIButton *activateBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     activateBtn.frame = CGRectMake(20, 155, cardWidth - 40, 42);
     activateBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.50 blue:0.98 alpha:1.0];
@@ -349,7 +330,6 @@ static void showCustomBawaGPopup(void) {
     [activateBtn addTarget:handler action:@selector(activatePressed) forControlEvents:UIControlEventTouchUpInside];
     [cardView addSubview:activateBtn];
 
-    // Quit Button
     UIButton *quitBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     quitBtn.frame = CGRectMake(20, 205, cardWidth - 40, 35);
     [quitBtn setTitle:@"Quit App" forState:UIControlStateNormal];
