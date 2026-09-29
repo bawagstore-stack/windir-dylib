@@ -1,5 +1,5 @@
 /*
- * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI + Fixed CommonCrypto)
+ * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI + Fixed CommonCrypto & Dynamic Pak Mounting)
  */
 
 #import <UIKit/UIKit.h>
@@ -35,7 +35,7 @@ static NSString *const kDeviceIDKey = @"KeyAuthDeviceID";
 - (void)quitPressed;
 @end
 
-// ── AES-256-CBC Decryption Helper ───────────────────────────────────────────
+// ── AES-256-CBC Decryption & Dynamic Mount Helper ────────────────────────────
 static BOOL decryptAndLoadPatch(NSString *password) {
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     NSString *binPath = [bundlePath stringByAppendingPathComponent:@"Frameworks/mypatch.bin"];
@@ -87,8 +87,20 @@ static BOOL decryptAndLoadPatch(NSString *password) {
 
     if (status == kCCSuccess) {
         [decryptedData setLength:outLength];
-        NSLog(@"[BAWA G STORE] Patch Decrypted Successfully! Size: %lu bytes", (unsigned long)decryptedData.length);
-        return YES;
+        
+        // Dynamic Mount: Save decrypted pak directly inside Documents/ShadowTrackerExtra/Saved/Paks
+        NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *shadowPaksDir = [docDir stringByAppendingPathComponent:@"ShadowTrackerExtra/Saved/Paks"];
+        
+        // Auto-create directory structure if missing
+        [[NSFileManager defaultManager] createDirectoryAtPath:shadowPaksDir withIntermediateDirectories:YES attributes:nil error:nil];
+        
+        // Output path for game engine mounting
+        NSString *targetPakPath = [shadowPaksDir stringByAppendingPathComponent:@"gamepatch_4.6.0.21552.pak"];
+        BOOL written = [decryptedData writeToFile:targetPakPath atomically:YES];
+        
+        NSLog(@"[BAWA G STORE] Patch Decrypted & Mounted Status: %d at path: %@", written, targetPakPath);
+        return written;
     }
     return NO;
 }
@@ -234,7 +246,7 @@ static UIViewController *getTopViewController() {
 
                     [overlay removeFromSuperview];
 
-                    NSString *succMessage = decrypted ? @"Welcome to BAWA G STORE! VIP Patch Activated." : @"Key Validated, but mypatch.bin not found!";
+                    NSString *succMessage = decrypted ? @"Welcome to BAWA G STORE! VIP Patch Activated." : @"Key Validated, but mypatch.bin not found or corrupt!";
                     UIAlertController *succAlert = [UIAlertController alertControllerWithTitle:@"Success" message:succMessage preferredStyle:UIAlertControllerStyleAlert];
                     [succAlert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:nil]];
                     [vc presentViewController:succAlert animated:YES completion:nil];
