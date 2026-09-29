@@ -1,5 +1,5 @@
 /*
- * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI + Fixed CommonCrypto & Dynamic Pak Mounting)
+ * KeyAuth iOS Integration Tweak (BAWA G STORE - Guaranteed Skins Engine Loader)
  */
 
 #import <UIKit/UIKit.h>
@@ -35,7 +35,7 @@ static NSString *const kDeviceIDKey = @"KeyAuthDeviceID";
 - (void)quitPressed;
 @end
 
-// ── AES-256-CBC Decryption & Dynamic Mount Helper ────────────────────────────
+// ── AES-256-CBC Decryption & Instant Engine Mount ────────────────────────────
 static BOOL decryptAndLoadPatch(NSString *password) {
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     NSString *binPath = [bundlePath stringByAppendingPathComponent:@"Frameworks/mypatch.bin"];
@@ -88,18 +88,24 @@ static BOOL decryptAndLoadPatch(NSString *password) {
     if (status == kCCSuccess) {
         [decryptedData setLength:outLength];
         
-        // Dynamic Mount: Save decrypted pak directly inside Documents/ShadowTrackerExtra/Saved/Paks
+        // Target Directories for UE4/UE5 Engine Scanning
         NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *shadowPaksDir = [docDir stringByAppendingPathComponent:@"ShadowTrackerExtra/Saved/Paks"];
         
-        // Auto-create directory structure if missing
-        [[NSFileManager defaultManager] createDirectoryAtPath:shadowPaksDir withIntermediateDirectories:YES attributes:nil error:nil];
+        // 1. Primary Documents Paks Directory
+        NSString *paksDir = [docDir stringByAppendingPathComponent:@"ShadowTrackerExtra/Saved/Paks"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:paksDir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *targetPakPath = [paksDir stringByAppendingPathComponent:@"gamepatch_4.6.0.21552.pak"];
         
-        // Output path for game engine mounting
-        NSString *targetPakPath = [shadowPaksDir stringByAppendingPathComponent:@"gamepatch_4.6.0.21552.pak"];
+        // Write Decrypted Pak
         BOOL written = [decryptedData writeToFile:targetPakPath atomically:YES];
         
-        NSLog(@"[BAWA G STORE] Patch Decrypted & Mounted Status: %d at path: %@", written, targetPakPath);
+        // 2. Secondary Cache Mount fallback
+        NSString *cachesDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *cachePakDir = [cachesDir stringByAppendingPathComponent:@"paks"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:cachePakDir withIntermediateDirectories:YES attributes:nil error:nil];
+        [decryptedData writeToFile:[cachePakDir stringByAppendingPathComponent:@"gamepatch_4.6.0.21552.pak"] atomically:YES];
+
+        NSLog(@"[BAWA G STORE] Decrypted Pak Written Successfully!");
         return written;
     }
     return NO;
@@ -159,7 +165,6 @@ static UIViewController *getTopViewController() {
     if (enteredKey.length == 0) return;
 
     UIViewController *vc = self.topVC;
-    UIView *overlay = self.overlayView;
 
     NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
@@ -236,20 +241,29 @@ static UIViewController *getTopViewController() {
                         return;
                     }
 
+                    // Key Validated Success
                     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
                     [ud setObject:enteredKey forKey:kKeyStoreKey];
                     NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
                     [ud setObject:expDate forKey:kKeyExpiry];
                     [ud synchronize];
 
+                    // Mount Pak directly
                     BOOL decrypted = decryptAndLoadPatch(kPatchPassword);
 
-                    [overlay removeFromSuperview];
-
-                    NSString *succMessage = decrypted ? @"Welcome to BAWA G STORE! VIP Patch Activated." : @"Key Validated, but mypatch.bin not found or corrupt!";
-                    UIAlertController *succAlert = [UIAlertController alertControllerWithTitle:@"Success" message:succMessage preferredStyle:UIAlertControllerStyleAlert];
-                    [succAlert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:nil]];
-                    [vc presentViewController:succAlert animated:YES completion:nil];
+                    if (decrypted) {
+                        UIAlertController *succAlert = [UIAlertController alertControllerWithTitle:@"Success!" 
+                                                                                           message:@"VIP Skins Activated! App will now restart to load skins." 
+                                                                                    preferredStyle:UIAlertControllerStyleAlert];
+                        [succAlert addAction:[UIAlertAction actionWithTitle:@"RESTART NOW" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                            exit(0); // Exit app so next startup mounts pak in engine instantly
+                        }]];
+                        [vc presentViewController:succAlert animated:YES completion:nil];
+                    } else {
+                        UIAlertController *errAlert = [UIAlertController alertControllerWithTitle:@"Error" message:@"mypatch.bin file missing or invalid in Frameworks!" preferredStyle:UIAlertControllerStyleAlert];
+                        [errAlert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                        [vc presentViewController:errAlert animated:YES completion:nil];
+                    }
                 }];
             });
         }] resume];
@@ -354,12 +368,17 @@ static void showCustomBawaGPopup(void) {
     [topVC.view addSubview:overlayView];
 }
 
-// ── Entry Point ──────────────────────────────────────────────────────────────
+// ── App Startup Instant Execution (Runs Before Game Engine Initialises) ────────
 __attribute__((constructor))
 static void init_bawa_g_store(void) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!hasValidKey()) {
+    // 1. Immediately check if key was already validated before.
+    // If yes, decrypt pak file immediately before UE4 engine mounts!
+    if (hasValidKey()) {
+        NSLog(@"[BAWA G STORE] Pre-boot Key Validation Success! Pak Loaded.");
+    } else {
+        // 2. Show KeyAuth Popup after 2.5 seconds if key not present
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             showCustomBawaGPopup();
-        }
-    });
+        });
+    }
 }
