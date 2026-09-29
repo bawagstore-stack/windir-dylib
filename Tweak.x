@@ -81,7 +81,7 @@ static UIViewController *getTopViewController() {
     NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
-    [req setValue:@"application/x-www-form-urlencoded" forHeaderField:@"Content-Type"];
+    [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
     NSString *initData = [NSString stringWithFormat:@"type=init&name=%@&ownerid=%@&secret=%@&ver=%@",
                           kName, kOwnerID, kSecret, kVersion];
@@ -126,7 +126,7 @@ static UIViewController *getTopViewController() {
         // Step 2: License Check
         NSMutableURLRequest *licReq = [NSMutableURLRequest requestWithURL:url];
         licReq.HTTPMethod = @"POST";
-        [licReq setValue:@"application/x-www-form-urlencoded" forHeaderField:@"Content-Type"];
+        [licReq setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
         NSString *licData = [NSString stringWithFormat:@"type=license&key=%@&hwid=%@&sessionid=%@&name=%@&ownerid=%@",
                              enteredKey, getDeviceID(), sessionID, kName, kOwnerID];
