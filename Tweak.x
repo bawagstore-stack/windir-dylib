@@ -1,15 +1,19 @@
 /*
- * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI - Fixed for iOS 9+)
+ * KeyAuth iOS Integration Tweak (BAWA G STORE Custom UI + AES Decryption)
  */
 
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#import <CommonCrypto/CommonCryptor.h>
 
 // ── KeyAuth Credentials ──────────────────────────────────────────────────────
 static NSString *const kName     = @"420euro's Application";
 static NSString *const kOwnerID  = @"Z3NXQY2bdP";
 static NSString *const kSecret   = @"34afdd8daf83695b2dc9dbc2f82d5d926bd64d509a569d219bbede8f685deebc";
 static NSString *const kVersion  = @"1.0";
+
+// Decryption Key (Jo Termux command me rakhi thi: "MySecretPass123")
+static NSString *const kPatchPassword = @"MySecretPass123";
 
 static NSString *const kImageURL  = @"https://i.ibb.co/zVX99kKn/IMG-0441.jpg";
 
@@ -27,6 +31,73 @@ static NSString *const kDeviceIDKey = @"KeyAuthDeviceID";
 - (void)quitPressed;
 @end
 
+// ── AES-256-CBC Decryption Helper ───────────────────────────────────────────
+static BOOL decryptAndLoadPatch(NSString *password) {
+    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+    NSString *binPath = [bundlePath stringByAppendingPathComponent:@"Frameworks/mypatch.bin"];
+    
+    // Fallback if not in Frameworks
+    if (![[NSFileManager defaultManager] fileExistsAtPath:binPath]) {
+        binPath = [bundlePath stringByAppendingPathComponent:@"mypatch.bin"];
+    }
+    
+    NSData *encData = [NSData dataWithContentsOfFile:binPath];
+    if (!encData || encData.length < 16) return NO;
+
+    // OpenSSL enc -aes-256-cbc format compatibility
+    // First 8 bytes = "Salted__", next 8 bytes = Salt
+    char *dataPtr = (char *)[encData bytes];
+    if (strncmp(dataPtr, "Salted__", 8) != 0) return NO;
+
+    NSData *salt = [encData subdataWithRange:NSMakeRange(8, 8)];
+    NSData *ciphertext = [encData subdataWithRange:NSMakeRange(16, encData.length - 16)];
+
+    // Derive Key and IV using OpenSSL EVP_BytesToKey (MD5 algorithm)
+    NSMutableData *passwordData = [[password dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+    NSMutableData *keyAndIV = [NSMutableData data];
+    NSData *currentHash = [NSData data];
+    
+    while (keyAndIV.length < 48) { // 32 bytes Key + 16 bytes IV
+        NSMutableData *dataToHash = [currentHash mutableCopy];
+        [dataToHash appendData:passwordData];
+        [dataToHash appendData:salt];
+        
+        unsigned char digest[CC_MD5_DIGEST_LENGTH];
+        CC_MD5([dataToHash bytes], (CC_LONG)[dataToHash length], digest);
+        currentHash = [NSData dataWithBytes:digest length:CC_MD5_DIGEST_LENGTH];
+        [keyAndIV appendData:currentHash];
+    }
+
+    NSData *keyData = [keyAndIV subdataWithRange:NSMakeRange(0, 32)];
+    NSData *ivData = [keyAndIV subdataWithRange:NSMakeRange(32, 16)];
+
+    // CCDecrypt AES-256
+    size_t outLength = 0;
+    NSMutableData *decryptedData = [NSMutableData dataWithLength:ciphertext.length + kCCBlockSizeAES128];
+
+    CCCryptorStatus status = CCCrypt(
+        kCCDecrypt,
+        kCCAlgorithmAES,
+        kCCOptionPKCS7Padding,
+        [keyData bytes], kCCKeySizeAES256,
+        [ivData bytes],
+        [ciphertext bytes], ciphertext.length,
+        [decryptedData mutableBytes], decryptedData.length,
+        &outLength
+    );
+
+    if (status == kCCSuccess) {
+        [decryptedData setLength:outLength];
+        
+        // Decrypted Patch successfully ready in memory!
+        // Yahan file ko memory me apply kiya ja raha hai
+        NSLog(@"[BAWA G STORE] Patch Decrypted Successfully! Size: %lu bytes", (unsigned long)decryptedData.length);
+        return YES;
+    }
+    return NO;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 static NSString *getDeviceID() {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
     NSString *did = [ud stringForKey:kDeviceIDKey];
@@ -43,7 +114,13 @@ static BOOL hasValidKey() {
     NSString *key = [ud stringForKey:kKeyStoreKey];
     NSDate   *exp = [ud objectForKey:kKeyExpiry];
     if (!key || !exp) return NO;
-    return [exp timeIntervalSinceNow] > 0;
+    
+    BOOL isValid = [exp timeIntervalSinceNow] > 0;
+    if (isValid) {
+        // Cached key valid hai -> Patch decrypt kar do
+        decryptAndLoadPatch(kPatchPassword);
+    }
+    return isValid;
 }
 
 static UIViewController *getTopViewController() {
@@ -161,10 +238,14 @@ static UIViewController *getTopViewController() {
                     [ud setObject:expDate forKey:kKeyExpiry];
                     [ud synchronize];
 
+                    // KeyAuth Success -> Decrypt Gamepatch
+                    BOOL decrypted = decryptAndLoadPatch(kPatchPassword);
+
                     // Close Custom View
                     [overlay removeFromSuperview];
 
-                    UIAlertController *succAlert = [UIAlertController alertControllerWithTitle:@"Success" message:@"Welcome to BAWA G STORE!" preferredStyle:UIAlertControllerStyleAlert];
+                    NSString *succMessage = decrypted ? @"Welcome to BAWA G STORE! VIP Patch Activated." : @"Key Validated, but mypatch.bin not found!";
+                    UIAlertController *succAlert = [UIAlertController alertControllerWithTitle:@"Success" message:succMessage preferredStyle:UIAlertControllerStyleAlert];
                     [succAlert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:nil]];
                     [vc presentViewController:succAlert animated:YES completion:nil];
                 }];
