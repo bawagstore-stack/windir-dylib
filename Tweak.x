@@ -1,20 +1,19 @@
 /*
- * WINDIR MODE - Keygate Tweak
- * Native UIAlertController popup — matches iOS system style.
- * Keys validated against Windir dashboard API.
- *
- * Build: make package FINALPACKAGE=1
- * Requires: Theos + iOS SDK (arm64)
+ * KeyAuth iOS Integration Tweak
  */
 
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 
-// ── Config ────────────────────────────────────────────────────────────────────
-static NSString *const kAPIBase     = @"https://web-dynamic-library--karrderriim.replit.app/api";
-static NSString *const kKeyStoreKey = @"WindirActivatedKey";
-static NSString *const kKeyExpiry   = @"WindirKeyExpiry";
-static NSString *const kDeviceIDKey = @"WindirDeviceID";
+// ── KeyAuth Credentials ──────────────────────────────────────────────────────
+static NSString *const kName     = @"420euro's Application";
+static NSString *const kOwnerID  = @"Z3NXQY2bdP";
+static NSString *const kSecret   = @"34afdd8daf83695b2dc9dbc2f82d5d926bd64d509a569d219bbede8f685deebc";
+static NSString *const kVersion  = @"1.0";
+
+static NSString *const kKeyStoreKey = @"KeyAuthActivatedKey";
+static NSString *const kKeyExpiry   = @"KeyAuthKeyExpiry";
+static NSString *const kDeviceIDKey = @"KeyAuthDeviceID";
 // ─────────────────────────────────────────────────────────────────────────────
 
 static NSString *getDeviceID() {
@@ -36,11 +35,10 @@ static BOOL hasValidKey() {
     return [exp timeIntervalSinceNow] > 0;
 }
 
-// Shows the key input alert — blocks the app until a valid key is entered
-static void showWindirAlert(UIViewController *vc) {
+static void showKeyAuthAlert(UIViewController *vc) {
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"WINDIR MODE"
-        message:@"Enter your WINDIR key to continue."
+        alertControllerWithTitle:@"License Verification"
+        message:@"Enter your KeyAuth license key to continue."
         preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
@@ -50,7 +48,6 @@ static void showWindirAlert(UIViewController *vc) {
         tf.autocorrectionType = UITextAutocorrectionTypeNo;
     }];
 
-    // ── Activate button ──────────────────────────────────────────────────────
     UIAlertAction *activate = [UIAlertAction
         actionWithTitle:@"Activate"
         style:UIAlertActionStyleDefault
@@ -60,33 +57,33 @@ static void showWindirAlert(UIViewController *vc) {
             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] uppercaseString];
 
         if (key.length == 0) {
-            // Show error and re-present
             UIAlertController *err = [UIAlertController
-                alertControllerWithTitle:@"WINDIR MODE"
+                alertControllerWithTitle:@"Error"
                 message:@"Please paste your license key."
                 preferredStyle:UIAlertControllerStyleAlert];
             UIAlertAction *ok = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *a) { showWindirAlert(vc); }];
+                handler:^(UIAlertAction *a) { showKeyAuthAlert(vc); }];
             [err addAction:ok];
             [vc presentViewController:err animated:YES completion:nil];
             return;
         }
 
-        // Show loading indicator
         UIAlertController *loading = [UIAlertController
-            alertControllerWithTitle:@"WINDIR MODE"
+            alertControllerWithTitle:@"KeyAuth"
             message:@"Validating key…"
             preferredStyle:UIAlertControllerStyleAlert];
         [vc presentViewController:loading animated:YES completion:nil];
 
-        // Call API
+        // KeyAuth API Endpoint Call
         NSString *deviceID = getDeviceID();
-        NSURL *url = [NSURL URLWithString:[kAPIBase stringByAppendingString:@"/keys/validate"]];
+        NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
         req.HTTPMethod = @"POST";
-        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        NSDictionary *body = @{@"key": key, @"deviceId": deviceID};
-        req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+
+        NSString *postData = [NSString stringWithFormat:@"type=license&key=%@&hwid=%@&name=%@&ownerid=%@&secret=%@&ver=%@",
+                              key, deviceID, kName, kOwnerID, kSecret, kVersion];
+        req.HTTPBody = [postData dataUsingEncoding:NSUTF8StringEncoding];
         req.timeoutInterval = 15;
 
         [[[NSURLSession sharedSession] dataTaskWithRequest:req
@@ -96,60 +93,51 @@ static void showWindirAlert(UIViewController *vc) {
 
                     if (err || !data) {
                         UIAlertController *netErr = [UIAlertController
-                            alertControllerWithTitle:@"WINDIR MODE"
+                            alertControllerWithTitle:@"Connection Error"
                             message:@"Network error. Check your connection."
                             preferredStyle:UIAlertControllerStyleAlert];
                         [netErr addAction:[UIAlertAction actionWithTitle:@"Retry"
                             style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showWindirAlert(vc); }]];
+                            handler:^(UIAlertAction *a) { showKeyAuthAlert(vc); }]];
                         [vc presentViewController:netErr animated:YES completion:nil];
                         return;
                     }
 
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                    BOOL valid = [json[@"valid"] boolValue];
+                    BOOL success = [json[@"success"] boolValue];
 
-                    if (!valid) {
-                        NSString *msg = json[@"error"] ?: @"Invalid key.";
+                    if (!success) {
+                        NSString *msg = json[@"message"] ?: @"Invalid key.";
                         UIAlertController *invalid = [UIAlertController
-                            alertControllerWithTitle:@"WINDIR MODE"
+                            alertControllerWithTitle:@"Activation Failed"
                             message:msg
                             preferredStyle:UIAlertControllerStyleAlert];
                         [invalid addAction:[UIAlertAction actionWithTitle:@"Try Again"
                             style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showWindirAlert(vc); }]];
+                            handler:^(UIAlertAction *a) { showKeyAuthAlert(vc); }]];
                         [vc presentViewController:invalid animated:YES completion:nil];
                         return;
                     }
 
-                    // ── Key valid — save locally ──────────────────────────
+                    // Key is valid — Save session (Default 30 days expiry)
                     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
                     [ud setObject:key forKey:kKeyStoreKey];
-                    NSISO8601DateFormatter *fmt = [[NSISO8601DateFormatter alloc] init];
-                    NSDate *exp = [fmt dateFromString:json[@"expiresAt"]];
-                    if (exp) [ud setObject:exp forKey:kKeyExpiry];
+                    NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
+                    [ud setObject:expDate forKey:kKeyExpiry];
                     [ud synchronize];
 
-                    // ── Success popup ─────────────────────────────────────
-                    NSString *pkg      = json[@"type"] ?: @"";
-                    NSString *timeLeft = json[@"timeLeft"] ?: @"";
-                    NSString *successMsg = [NSString stringWithFormat:
-                        @"✅ WINDIR %@ activated\n⏳ %@ remaining\n\n🔒 Protected by WINDIR",
-                        pkg, timeLeft];
-
-                    UIAlertController *success = [UIAlertController
-                        alertControllerWithTitle:@"WINDIR MODE"
-                        message:successMsg
+                    UIAlertController *successAlert = [UIAlertController
+                        alertControllerWithTitle:@"Success"
+                        message:@"License activated successfully!"
                         preferredStyle:UIAlertControllerStyleAlert];
-                    [success addAction:[UIAlertAction actionWithTitle:@"Enter App"
+                    [successAlert addAction:[UIAlertAction actionWithTitle:@"Enter App"
                         style:UIAlertActionStyleDefault handler:nil]];
-                    [vc presentViewController:success animated:YES completion:nil];
+                    [vc presentViewController:successAlert animated:YES completion:nil];
                 }];
             });
         }] resume];
     }];
 
-    // ── Quit button ──────────────────────────────────────────────────────────
     UIAlertAction *quit = [UIAlertAction
         actionWithTitle:@"Quit"
         style:UIAlertActionStyleDestructive
@@ -162,7 +150,6 @@ static void showWindirAlert(UIViewController *vc) {
     [vc presentViewController:alert animated:YES completion:nil];
 }
 
-// ── Hook ──────────────────────────────────────────────────────────────────────
 %hook UIViewController
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -171,7 +158,7 @@ static void showWindirAlert(UIViewController *vc) {
     dispatch_once(&once, ^{
         if (hasValidKey()) return;
         dispatch_async(dispatch_get_main_queue(), ^{
-            showWindirAlert(self);
+            showKeyAuthAlert(self);
         });
     });
 }
