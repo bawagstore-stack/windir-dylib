@@ -1,5 +1,5 @@
 /*
- * KeyAuth iOS Integration Tweak
+ * KeyAuth iOS Integration Tweak (Crash-Safe Version)
  */
 
 #import <UIKit/UIKit.h>
@@ -35,7 +35,17 @@ static BOOL hasValidKey() {
     return [exp timeIntervalSinceNow] > 0;
 }
 
+static UIViewController *getTopViewController() {
+    UIViewController *topController = [UIApplication sharedApplication].keyWindow.rootViewController;
+    while (topController.presentedViewController) {
+        topController = topController.presentedViewController;
+    }
+    return topController;
+}
+
 static void showKeyAuthAlert(UIViewController *vc) {
+    if (!vc) return;
+
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:@"License Verification"
         message:@"Enter your KeyAuth license key to continue."
@@ -57,24 +67,26 @@ static void showKeyAuthAlert(UIViewController *vc) {
             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] uppercaseString];
 
         if (key.length == 0) {
+            UIViewController *currentVC = getTopViewController();
             UIAlertController *err = [UIAlertController
                 alertControllerWithTitle:@"Error"
                 message:@"Please paste your license key."
                 preferredStyle:UIAlertControllerStyleAlert];
             UIAlertAction *ok = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *a) { showKeyAuthAlert(vc); }];
+                handler:^(UIAlertAction *a) { showKeyAuthAlert(currentVC); }];
             [err addAction:ok];
-            [vc presentViewController:err animated:YES completion:nil];
+            [currentVC presentViewController:err animated:YES completion:nil];
             return;
         }
 
+        UIViewController *currentVC = getTopViewController();
         UIAlertController *loading = [UIAlertController
             alertControllerWithTitle:@"KeyAuth"
             message:@"Validating key…"
             preferredStyle:UIAlertControllerStyleAlert];
-        [vc presentViewController:loading animated:YES completion:nil];
+        [currentVC presentViewController:loading animated:YES completion:nil];
 
-        // KeyAuth API Endpoint Call
+        // KeyAuth API Call
         NSString *deviceID = getDeviceID();
         NSURL *url = [NSURL URLWithString:@"https://keyauth.win/api/1.2/"];
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
@@ -90,6 +102,7 @@ static void showKeyAuthAlert(UIViewController *vc) {
             completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [loading dismissViewControllerAnimated:NO completion:^{
+                    UIViewController *topVC = getTopViewController();
 
                     if (err || !data) {
                         UIAlertController *netErr = [UIAlertController
@@ -98,8 +111,8 @@ static void showKeyAuthAlert(UIViewController *vc) {
                             preferredStyle:UIAlertControllerStyleAlert];
                         [netErr addAction:[UIAlertAction actionWithTitle:@"Retry"
                             style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showKeyAuthAlert(vc); }]];
-                        [vc presentViewController:netErr animated:YES completion:nil];
+                            handler:^(UIAlertAction *a) { showKeyAuthAlert(topVC); }]];
+                        [topVC presentViewController:netErr animated:YES completion:nil];
                         return;
                     }
 
@@ -114,12 +127,12 @@ static void showKeyAuthAlert(UIViewController *vc) {
                             preferredStyle:UIAlertControllerStyleAlert];
                         [invalid addAction:[UIAlertAction actionWithTitle:@"Try Again"
                             style:UIAlertActionStyleDefault
-                            handler:^(UIAlertAction *a) { showKeyAuthAlert(vc); }]];
-                        [vc presentViewController:invalid animated:YES completion:nil];
+                            handler:^(UIAlertAction *a) { showKeyAuthAlert(topVC); }]];
+                        [topVC presentViewController:invalid animated:YES completion:nil];
                         return;
                     }
 
-                    // Key is valid — Save session (Default 30 days expiry)
+                    // Save Key Valid Status
                     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
                     [ud setObject:key forKey:kKeyStoreKey];
                     NSDate *expDate = [NSDate dateWithTimeIntervalSinceNow:30 * 24 * 60 * 60];
@@ -132,7 +145,7 @@ static void showKeyAuthAlert(UIViewController *vc) {
                         preferredStyle:UIAlertControllerStyleAlert];
                     [successAlert addAction:[UIAlertAction actionWithTitle:@"Enter App"
                         style:UIAlertActionStyleDefault handler:nil]];
-                    [vc presentViewController:successAlert animated:YES completion:nil];
+                    [topVC presentViewController:successAlert animated:YES completion:nil];
                 }];
             });
         }] resume];
@@ -150,15 +163,17 @@ static void showKeyAuthAlert(UIViewController *vc) {
     [vc presentViewController:alert animated:YES completion:nil];
 }
 
-%hook UIViewController
+// ── Safe Application Hook ───────────────────────────────────────────────────
+%hook UIApplication
 
-- (void)viewDidAppear:(BOOL)animated {
+- (void)applicationDidBecomeActive:(UIApplication *)application {
     %orig;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
         if (hasValidKey()) return;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            showKeyAuthAlert(self);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIViewController *topVC = getTopViewController();
+            showKeyAuthAlert(topVC);
         });
     });
 }
